@@ -19,14 +19,14 @@ model User {
 }
 
 model Contact {
-  id    String   @id @default(cuid())
-  name  String
-  phone String   @unique
-
+  id       String   @id @default(cuid())
+  name     String
+  phone    String   @unique
+  channel  String   @default("sms")
+  
   createdAt DateTime @default(now())
-
-  threads Thread[]
-
+  threads  Thread[]
+  
   @@map("contacts")
 }
 
