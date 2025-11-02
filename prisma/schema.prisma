@@ -1,0 +1,65 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id    String   @id @default(cuid())
+  email String   @unique
+  name  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Contact {
+  id    String   @id @default(cuid())
+  name  String
+  phone String   @unique
+
+  createdAt DateTime @default(now())
+
+  threads Thread[]
+
+  @@map("contacts")
+}
+
+model Thread {
+  id        String   @id @default(cuid())
+  contactId String
+
+  isUnread  Boolean  @default(true)
+  isArchived Boolean @default(false)
+
+  lastMessageAt DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@index([contactId])
+  @@map("threads")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  threadId  String
+
+  body      String
+  direction String   // "INBOUND" | "OUTBOUND"
+
+  twilioSid String?  @unique
+
+  createdAt DateTime @default(now())
+
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("messages")
+}
