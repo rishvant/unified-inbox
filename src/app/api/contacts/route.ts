@@ -8,12 +8,31 @@ const contactSchema = z.object({
   channel: z.enum(["sms", "whatsapp"]).default("sms"),
 });
 
+function cleanPhoneNumber(phone: string) {
+  // Remove 'whatsapp:' prefix if it exists
+  return phone.replace(/^whatsapp:/, '');
+}
+
 export async function GET() {
   try {
     const contacts = await prisma.contact.findMany({
       orderBy: { createdAt: "desc" },
+      include: {
+        threads: {
+          orderBy: { lastMessageAt: 'desc' },
+          take: 1
+        }
+      },
     });
-    return NextResponse.json(contacts);
+    
+    // Clean up phone numbers and format response
+    const cleanedContacts = contacts.map(contact => ({
+      ...contact,
+      phone: cleanPhoneNumber(contact.phone),
+      lastMessageAt: contact.threads[0]?.lastMessageAt || contact.createdAt
+    }));
+    
+    return NextResponse.json(cleanedContacts);
   } catch (error) {
     console.error("Error fetching contacts:", error);
     return NextResponse.json(

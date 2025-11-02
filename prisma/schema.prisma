@@ -33,6 +33,7 @@ model Contact {
 model Thread {
   id        String   @id @default(cuid())
   contactId String
+  channel   String   @default("sms")
 
   isUnread  Boolean  @default(true)
   isArchived Boolean @default(false)
@@ -43,6 +44,7 @@ model Thread {
   contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   messages  Message[]
 
+  @@unique([contactId, channel])
   @@index([contactId])
   @@map("threads")
 }
@@ -53,6 +55,7 @@ model Message {
 
   body      String
   direction String   // "INBOUND" | "OUTBOUND"
+  channel   String   @default("sms")  // "sms" | "whatsapp"
 
   twilioSid String?  @unique
 
