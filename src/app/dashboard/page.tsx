@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 
 // Utility function to clean phone numbers
 const cleanPhoneNumber = (phone: string): string => {
@@ -10,6 +10,7 @@ const cleanPhoneNumber = (phone: string): string => {
 import { useContacts, useThreadMessages, useSendMessage } from "@/lib/hooks/useMessages";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
+import { ContactProfileModal } from "../components/ContactProfileModal";
 
 const contactSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -18,6 +19,18 @@ const contactSchema = z.object({
 });
 
 type Channel = 'sms' | 'whatsapp';
+
+function useAnalytics() {
+  return useQuery({
+    queryKey: ["analytics"],
+    queryFn: async () => {
+      const res = await fetch("/api/analytics");
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    refetchInterval: 30000, // Refresh every 30s
+  });
+}
 
 export default function Dashboard() {
   const { data: contacts, isLoading: contactsLoading } = useContacts();
@@ -31,7 +44,13 @@ export default function Dashboard() {
     channel: "whatsapp" as Channel,
   });
   const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("");
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
   const queryClient = useQueryClient();
+  const { data: analytics } = useAnalytics();
 
   const selectedContact = contacts?.find(
     (c: any) => c.id === selectedContactId
@@ -47,6 +66,15 @@ export default function Dashboard() {
     lastMessageAt: string | null;
     createdAt: string;
   }
+
+  const handleQuickSend = (channel: 'sms' | 'whatsapp') => {
+    setSelectedChannel(channel);
+    setShowProfileModal(false);
+    // Focus will automatically be on message input
+    setTimeout(() => {
+      document.querySelector('input[placeholder="Type a message..."]')?.focus();
+    }, 100);
+  };
 
   // Get or create thread based on contact and selected channel
   const { data: thread, refetch: refetchThread } = useQuery({
@@ -70,14 +98,10 @@ export default function Dashboard() {
       }
     },
     enabled: !!selectedContactId,
-    // Keep previous data while refetching to prevent UI flicker
     keepPreviousData: true,
   });
 
-  // Use the thread ID from the database
   const threadId = thread?.id || '';
-
-  // Use the thread ID with channel information
   const { data: messages = [], refetch: refetchMessages } = useThreadMessages(threadId);
 
   // Refetch thread and messages when channel or contact changes
@@ -89,29 +113,21 @@ export default function Dashboard() {
         threadId
       });
       refetchThread().then(() => {
-        // After thread is refetched, refetch messages with the updated thread ID
         refetchMessages();
       });
     }
   }, [selectedChannel, selectedContactId, refetchThread, refetchMessages, threadId]);
-  
-  // Log thread and messages for debugging
-  useEffect(() => {
-    console.log('Thread ID:', threadId);
-    console.log('Thread data:', thread);
-    console.log('Messages:', messages);
-  }, [threadId, thread, messages]);
-  
+
   // Auto-refresh messages every 5 seconds
   useEffect(() => {
     if (!threadId) return;
-    
+
     console.log('Setting up message refresh for thread:', threadId);
     const interval = setInterval(() => {
       console.log('Refreshing messages for thread:', threadId);
       refetchMessages();
     }, 5000);
-    
+
     return () => {
       console.log('Clearing message refresh interval');
       clearInterval(interval);
@@ -130,6 +146,9 @@ export default function Dashboard() {
     });
 
     setMessageBody("");
+    setShowSchedule(false);
+    setScheduleDate("");
+    setScheduleTime("");
   };
 
   const createContact = useMutation({
@@ -163,12 +182,10 @@ export default function Dashboard() {
       if (!validatedData.success) {
         const errors: Record<string, string> = {};
         validatedData.error.issues.forEach((issue) => {
-          // Ensure path[0] is a string before using it as an index
           const path = issue.path[0];
           if (typeof path === 'string') {
             errors[path] = issue.message;
           } else {
-            // Fallback for non-string paths
             errors['_error'] = issue.message;
           }
         });
@@ -191,27 +208,83 @@ export default function Dashboard() {
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
-      <div className="w-80 border-r bg-gray-50">
+      <div className="w-80 border-r bg-gray-50 flex flex-col">
         <div className="p-4 border-b">
           <h1 className="text-xl font-bold">Unified Inbox</h1>
         </div>
 
+        {/* Analytics Section - Only show when no contact selected */}
+        {!selectedContactId && (
+          <div className="p-4 bg-white border-b">
+            <h2 className="text-sm font-bold mb-3">📊 Analytics</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-blue-50 p-3 rounded text-center">
+                <p className="text-xs text-gray-600">Messages</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {analytics?.totalMessages || 0}
+                </p>
+              </div>
+              <div className="bg-green-50 p-3 rounded text-center">
+                <p className="text-xs text-gray-600">Contacts</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {analytics?.contactsCount || 0}
+                </p>
+              </div>
+              <div className="bg-purple-50 p-3 rounded text-center">
+                <p className="text-xs text-gray-600">Avg Response</p>
+                <p className="text-2xl font-bold text-purple-600">
+                  {analytics?.avgResponseTimeMinutes || 0}m
+                </p>
+              </div>
+              <div className="bg-orange-50 p-3 rounded text-center">
+                <p className="text-xs text-gray-600">Channels</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {analytics?.messagesByChannel?.length || 0}
+                </p>
+              </div>
+            </div>
+
+            {/* Channel breakdown */}
+            {analytics?.messagesByChannel && analytics.messagesByChannel.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-xs font-semibold mb-2 text-gray-600">By Channel</h3>
+                <div className="space-y-1">
+                  {analytics.messagesByChannel.map((item: any) => (
+                    <div key={item.channel} className="flex justify-between items-center text-sm">
+                      <span className="capitalize">{item.channel}</span>
+                      <span className="font-bold">{item.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="p-4">
-          <button 
+          <button
             onClick={() => setIsContactModalOpen(true)}
-            className="w-full bg-blue-600 text-white py-2 rounded mb-4 hover:bg-blue-700 transition-colors"
+            className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition-colors"
           >
             + New Contact
           </button>
 
           {/* Contact Creation Modal */}
           {isContactModalOpen && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-lg p-6 w-full max-w-md">
-                <h2 className="text-xl font-bold mb-4">Add New Contact</h2>
-                
+            <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-white/95 backdrop-blur-md rounded-xl p-6 w-full max-w-md shadow-2xl border border-white/20">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold">Add New Contact</h2>
+                  <button
+                    onClick={() => setIsContactModalOpen(false)}
+                    className="text-gray-500 hover:text-gray-700 text-2xl"
+                  >
+                    ✕
+                  </button>
+                </div>
+
                 <form onSubmit={handleCreateContact}>
-                  <div className="space-y-4">
+                  <div className="space-y-4 bg-white/80 backdrop-blur-sm p-4 rounded-lg border border-gray-100 shadow-sm">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Name *
@@ -219,8 +292,8 @@ export default function Dashboard() {
                       <input
                         type="text"
                         value={newContact.name}
-                        onChange={(e) => 
-                          setNewContact({...newContact, name: e.target.value })
+                        onChange={(e) =>
+                          setNewContact({ ...newContact, name: e.target.value })
                         }
                         className="w-full border rounded px-3 py-2"
                         placeholder="John Doe"
@@ -238,16 +311,16 @@ export default function Dashboard() {
                         <input
                           type="tel"
                           value={newContact.phone}
-                          onChange={(e) => 
-                            setNewContact({...newContact, phone: e.target.value })
+                          onChange={(e) =>
+                            setNewContact({ ...newContact, phone: e.target.value })
                           }
                           className="flex-1 border rounded-l px-3 py-2"
                           placeholder="+1234567890"
                         />
                         <select
                           value={newContact.channel}
-                          onChange={(e) => 
-                            setNewContact({...newContact, channel: e.target.value as Channel})
+                          onChange={(e) =>
+                            setNewContact({ ...newContact, channel: e.target.value as Channel })
                           }
                           className="border-t border-r border-b border-l-0 rounded-r px-3 py-2 bg-gray-50"
                         >
@@ -279,12 +352,14 @@ export default function Dashboard() {
                         className="px-4 py-2 border rounded-md text-gray-700 hover:bg-gray-50"
                         disabled={createContact.isPending}
                       >
-                        Cancel
+                        <div className="pt-2">
+                          Cancel
+                        </div>
                       </button>
                       <button
                         type="submit"
-                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
                         disabled={createContact.isPending}
+                        className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
                       >
                         {createContact.isPending ? 'Saving...' : 'Save Contact'}
                       </button>
@@ -296,26 +371,30 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="overflow-y-auto">
+        {/* Contacts List */}
+        <div className="flex-1 overflow-y-auto">
           {contacts?.map((contact: any) => {
-            const lastMessageTime = new Date(contact.lastMessageAt).toLocaleTimeString([], { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            });
-            
+            const lastMessageTime = contact.lastMessageAt
+              ? new Date(contact.lastMessageAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+              : '';
+
             return (
               <div
                 key={contact.id}
                 onClick={() => setSelectedContactId(contact.id)}
-                className={`p-4 cursor-pointer hover:bg-gray-50 border-b ${
-                  selectedContactId === contact.id ? "bg-blue-50" : ""
-                }`}
+                className={`p-4 cursor-pointer hover:bg-gray-100 border-b transition-colors ${selectedContactId === contact.id ? "bg-blue-50 border-l-4 border-blue-600" : ""
+                  }`}
               >
                 <div className="flex justify-between items-start">
                   <div className="font-medium">{contact.name}</div>
-                  <span className="text-xs text-gray-400">
-                    {lastMessageTime}
-                  </span>
+                  {lastMessageTime && (
+                    <span className="text-xs text-gray-400">
+                      {lastMessageTime}
+                    </span>
+                  )}
                 </div>
                 <div className="text-sm text-gray-500 truncate">
                   {cleanPhoneNumber(contact.phone)}
@@ -331,9 +410,17 @@ export default function Dashboard() {
         {selectedContact ? (
           <>
             {/* Header */}
-            <div className="p-4 border-b">
+            <div className="p-4 border-b bg-white">
               <div className="flex justify-between items-center mb-1">
-                <h2 className="text-lg font-semibold">{selectedContact.name}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold">{selectedContact.name}</h2>
+                  <button
+                    onClick={() => setShowProfileModal(true)}
+                    className="text-blue-600 hover:text-blue-800 text-sm underline"
+                  >
+                    View Profile
+                  </button>
+                </div>
                 <div className="flex items-center space-x-2">
                   <span className="text-sm text-gray-500">Send as:</span>
                   <select
@@ -347,15 +434,10 @@ export default function Dashboard() {
                 </div>
               </div>
               <p className="text-sm text-gray-500">{selectedContact.phone}</p>
-              <div className="mt-1">
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                  {selectedChannel.toUpperCase()}
-                </span>
-              </div>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
               <div className="space-y-4">
                 {messages?.length === 0 ? (
                   <div className="text-center text-gray-500 py-8">
@@ -365,25 +447,28 @@ export default function Dashboard() {
                   messages?.map((msg: any) => (
                     <div
                       key={msg.id}
-                      className={`p-3 rounded-lg ${
-                        msg.direction === "OUTBOUND"
-                          ? "bg-blue-500 text-white ml-auto"
-                          : "bg-gray-100 mr-auto"
-                      } max-w-xs`}
+                      className={`flex ${msg.direction === "OUTBOUND" ? "justify-end" : "justify-start"}`}
                     >
-                      <div className="break-words">{msg.body}</div>
-                      <div className="flex items-center justify-between mt-1">
-                        <div className="text-xs text-gray-400">
-                          {msg.direction === 'OUTBOUND' 
-                            ? 'You' 
-                            : selectedContact?.name || cleanPhoneNumber(selectedContact?.phone || '')}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
+                      <div
+                        className={`p-3 rounded-lg max-w-xs ${msg.direction === "OUTBOUND"
+                          ? "bg-blue-500 text-white rounded-br-none"
+                          : "bg-white text-gray-900 rounded-bl-none shadow"
+                          }`}
+                      >
+                        <div className="break-words">{msg.body}</div>
+                        <div className="flex items-center justify-between mt-1 gap-2">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${msg.direction === "OUTBOUND"
+                            ? "bg-blue-400 text-white"
+                            : "bg-gray-100 text-gray-600"
+                            }`}>
                             {msg.channel?.toUpperCase() || 'SMS'}
                           </span>
-                          <div className="text-xs text-gray-400">
-                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          <div className={`text-xs ${msg.direction === "OUTBOUND" ? "text-blue-100" : "text-gray-400"
+                            }`}>
+                            {new Date(msg.createdAt).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
                           </div>
                         </div>
                       </div>
@@ -394,29 +479,83 @@ export default function Dashboard() {
             </div>
 
             {/* Composer */}
-            <div className="p-4 border-t flex gap-2">
-              <input
-                type="text"
-                value={messageBody}
-                onChange={(e) => setMessageBody(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === "Enter") handleSend();
-                }}
-                placeholder="Type a message..."
-                className="flex-1 border rounded px-3 py-2"
-              />
-              <button
-                onClick={handleSend}
-                disabled={sendMessage.isPending}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-              >
-                Send
-              </button>
+            <div className="p-4 border-t bg-white">
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={messageBody}
+                    onChange={(e) => setMessageBody(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Type a message..."
+                    className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+
+                  {showSchedule && (
+                    <div className="flex gap-2 mt-2">
+                      <input
+                        type="date"
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="border rounded px-3 py-2 text-sm"
+                      />
+                      <input
+                        type="time"
+                        value={scheduleTime}
+                        onChange={(e) => setScheduleTime(e.target.value)}
+                        className="border rounded px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => setShowSchedule(!showSchedule)}
+                  className={`px-3 py-2 border rounded hover:bg-gray-50 ${showSchedule ? 'bg-blue-50 border-blue-300' : ''
+                    }`}
+                  title="Schedule message"
+                >
+                  ⏰
+                </button>
+
+                <button
+                  onClick={handleSend}
+                  disabled={sendMessage.isPending || !messageBody.trim()}
+                  className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {showSchedule ? "Schedule" : "Send"}
+                </button>
+              </div>
             </div>
+
+            {showProfileModal && (
+              <ContactProfileModal
+                contactId={selectedContactId}
+                onClose={() => setShowProfileModal(false)}
+                onSendMessage={handleQuickSend}
+              />
+            )}
           </>
         ) : (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            Select a contact to start
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-500 bg-gray-50">
+            <div className="text-center">
+              <p className="text-2xl mb-2">👋 Welcome to Unified Inbox</p>
+              <p className="text-gray-400">Select a contact to start messaging</p>
+
+              {analytics && (
+                <div className="mt-8 bg-white p-6 rounded-lg shadow">
+                  <p className="text-4xl font-bold text-blue-600 mb-2">
+                    {analytics.totalMessages}
+                  </p>
+                  <p className="text-sm text-gray-600">Total Messages Sent</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
